@@ -1,51 +1,61 @@
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
+const HASH_FILE = 'hashes.txt';
 
-app.use(express.json());
+app.use(cors());
+app.use(bodyParser.json());
 
-// Загружаем хеши
-const DB_FILE = 'hashes.txt';
-let hashes = {};
-
-function loadHashes() {
-  if (fs.existsSync(DB_FILE)) {
-    const lines = fs.readFileSync(DB_FILE, 'utf-8').split('\n');
-    for (let line of lines) {
-      const [hash, value, type] = line.trim().split(':');
-      if (hash) hashes[hash] = { value, type };
+// Создание хеша и сохранение
+app.post('/generate', (req, res) => {
+    const { text, type } = req.body;
+    if (!text || !type) {
+        return res.status(400).json({ error: 'Нужно указать text и type' });
     }
-  }
-}
-loadHashes();
 
-function saveHash(hash, value, type) {
-  hashes[hash] = { value, type };
-  fs.appendFileSync(DB_FILE, `${hash}:${value}:${type}\n`);
-}
+    let hash;
+    try {
+        hash = crypto.createHash(type.toLowerCase()).update(text).digest('hex');
+    } catch (e) {
+        return res.status(400).json({ error: 'Неподдерживаемый тип хеша' });
+    }
 
-// ➕ Добавить хеш
-app.post('/add', (req, res) => {
-  const { hash, value, type } = req.body;
-  if (!hash || !value || !type) return res.status(400).send('Bad request');
-  if (!hashes[hash]) saveHash(hash, value, type);
-  res.json({ success: true });
+    const line = `${hash}:${text}:${type.toUpperCase()}\n`;
+
+    fs.appendFile(HASH_FILE, line, err => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ error: 'Не удалось сохранить хеш' });
+        }
+        res.json({ success: true, hash, type: type.toUpperCase() });
+    });
 });
 
-// 🔍 Найти хеш
-app.post('/find', (req, res) => {
-  const { hash } = req.body;
-  if (!hash) return res.status(400).send('Missing hash');
-  if (hashes[hash]) {
-    res.json({ found: true, ...hashes[hash] });
-  } else {
-    res.json({ found: false });
-  }
-});
+// Поиск по хешу
+app.get('/find', (req, res) => {
+    const { hash } = req.query;
+    if (!hash) return res.status(400).json({ error: 'Нужен параметр hash' });
 
-app.get('/', (req, res) => res.send('Hash server is working'));
+    fs.readFile(HASH_FILE, 'utf8', (err, data) => {
+        if (err) return res.status(500).json({ error: 'Не удалось прочитать файл' });
+
+        const lines = data.trim().split('\n');
+        const found = lines.find(line => line.startsWith(hash + ':'));
+
+        if (found) {
+            const [, text, type] = found.split(':');
+            res.json({ found: true, hash, text, type });
+        } else {
+            res.json({ found: false });
+        }
+    });
+});
 
 app.listen(PORT, () => {
-  console.log('Server running on port', PORT);
+    console.log(`✅ Server running on port ${PORT}`);
 });
